@@ -33,3 +33,42 @@ use their own conditions.
 Every orchestration action is time-monotonic against both its own activity log
 and the incident history: it cannot predate the incident's `reported_at` or its
 latest transition event.
+
+## Fixture CALL-E verification boundary
+
+`integrations.calle` defines a typed `plan_call`, `run_call`, and `get_call_run`
+contract for future verification calls. Planning requires a narrow capability
+issued by `RecoveryOrchestrator` for an open, roster-approved attempt; the
+request must exactly match that capability's incident, provider, attempt,
+idempotency, requirement, disclosure, and request-time snapshot. The repository supplies only
+`FixtureCalleAdapter`, which reads local, deterministic fixture results and
+never invokes CALL-E, a phone, a network service, booking, or handoff. Its
+output is correlated to the incident, approved-provider candidate, provider
+attempt, and idempotency key. A result can become `CapabilityEvidence` only
+through that adapter for its identity-registered run: caller-created runs,
+requests, matching strings, and provenance cannot mint evidence.
+
+Plan capabilities are revalidated against the orchestrator's current attempt
+record and incident state for every use. Completing or failing the attempt, or
+moving the incident to a terminal state (including cancellation or human
+approval), makes the capability non-actionable.
+
+The fixture adapter exposes controlled requirement-code disclosure only. Each
+assertion has a controlled key, typed state/value semantics, immutable derived
+evidence ID, provider, provenance, and timezone-aware observation/expiry times.
+Assertions must be request-key subsets and must be observed no earlier than
+the actual run start and no later than run completion. Duplicate run IDs, plan IDs, correlations, or
+assertions for a key fail closed. `UNKNOWN` remains an evidence assertion, not
+a positive result. The fixture lifecycle is protected by a process-local lock.
+The `LiveCalleAdapter` placeholder implements no behavior and consumes its
+separate single-use, expiring, operator-issued call authorization at the
+future external execution boundary before returning its fail-closed unavailable
+response; retries require fresh authorization, and a handoff approval never
+substitutes for this authorization.
+
+`fixtures/calle_provider_verification.json` demonstrates three approved
+candidates: Provider A lacks required lift/boarding capability and is
+incompatible; Provider B has a vehicle but cannot verify securement and stays
+unknown; Provider C verifies every hard mobility constraint. C also verifies
+ETA, pickup/service area, and authorization/payment-route facts, but these
+soft operational facts do not substitute for hard safety constraints.

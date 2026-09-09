@@ -1,0 +1,60 @@
+[
+  {
+    "run_id": "fixture-run:demo-001:provider-a",
+    "plan_id": "fixture-plan:78c352cc53d9ce000b3e02e3f671cb6a873dcbdd987ffefa9e4586d710b2246f",
+    "incident_id": "demo-001",
+    "provider_id": "provider-a",
+    "provider_attempt_id": "demo-001:attempt:1",
+    "idempotency_key": "provider-a-key",
+    "status": "COMPLETED",
+    "provenance": "fixture-calle:provider-a",
+    "started_at": "2026-09-09T09:01:00+00:00",
+    "completed_at": "2026-09-09T09:04:00+00:00",
+    "assertions": [
+      {"requirement_code": "vehicle_availability", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "lift", "assertion": "INCOMPATIBLE", "value": false, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "boarding_method", "assertion": "INCOMPATIBLE", "value": "unavailable", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"}
+    ]
+  },
+  {
+    "run_id": "fixture-run:demo-001:provider-b",
+    "plan_id": "fixture-plan:9826a6d0d574f6e95db54332d666094fc6c909ad852158d2bb15d951b9d05425",
+    "incident_id": "demo-001",
+    "provider_id": "provider-b",
+    "provider_attempt_id": "demo-001:attempt:1",
+    "idempotency_key": "provider-b-key",
+    "status": "COMPLETED",
+    "provenance": "fixture-calle:provider-b",
+    "started_at": "2026-09-09T09:01:00+00:00",
+    "completed_at": "2026-09-09T09:04:00+00:00",
+    "assertions": [
+      {"requirement_code": "vehicle_availability", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "lift", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "boarding_method", "assertion": "VERIFIED", "value": "lift_boarding", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "wheelchair_securement", "assertion": "UNKNOWN", "value": null, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"}
+    ]
+  },
+  {
+    "run_id": "fixture-run:demo-001:provider-c",
+    "plan_id": "fixture-plan:11db2ff618227b097af2e678a6da92159f10afae2dedc1edc9c478cbf26f0274",
+    "incident_id": "demo-001",
+    "provider_id": "provider-c",
+    "provider_attempt_id": "demo-001:attempt:1",
+    "idempotency_key": "provider-c-key",
+    "status": "COMPLETED",
+    "provenance": "fixture-calle:provider-c",
+    "started_at": "2026-09-09T09:01:00+00:00",
+    "completed_at": "2026-09-09T09:04:00+00:00",
+    "assertions": [
+      {"requirement_code": "vehicle_availability", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "lift", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "boarding_method", "assertion": "VERIFIED", "value": "lift_boarding", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "wheelchair_securement", "assertion": "VERIFIED", "value": true, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "eta", "assertion": "VERIFIED", "value": 25, "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "pickup_area", "assertion": "VERIFIED", "value": "covered", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "service_area", "assertion": "VERIFIED", "value": "covered", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "authorization_route", "assertion": "VERIFIED", "value": "confirmed", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"},
+      {"requirement_code": "payment_route", "assertion": "VERIFIED", "value": "confirmed", "observed_at": "2026-09-09T09:03:00+00:00", "expires_at": "2026-09-09T10:00:00+00:00"}
+    ]
+  }
+]

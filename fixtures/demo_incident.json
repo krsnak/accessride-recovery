@@ -1,5 +1,15 @@
 {
   "incident_id": "demo-001",
-  "requirements": [{"code": "wheelchair_securement", "hard_constraint": true}],
+  "requirements": [
+    {"code": "vehicle_availability", "hard_constraint": true},
+    {"code": "lift", "hard_constraint": true},
+    {"code": "boarding_method", "hard_constraint": true},
+    {"code": "wheelchair_securement", "hard_constraint": true},
+    {"code": "eta", "hard_constraint": false},
+    {"code": "pickup_area", "hard_constraint": false},
+    {"code": "service_area", "hard_constraint": false},
+    {"code": "authorization_route", "hard_constraint": false},
+    {"code": "payment_route", "hard_constraint": false}
+  ],
   "note": "Operational demo fixture only; do not add diagnoses."
 }

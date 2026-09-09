@@ -9,6 +9,7 @@ from accessride.domain.providers import InMemoryApprovedProviderRoster, Provider
 from accessride.domain.states import AssertionState, CompatibilityStatus, HandoffAction, IncidentState
 from accessride.integrations.calle import FixtureCalleAdapter
 from accessride.services.compatibility import DecisionRegistry, DeterministicCompatibilityService
+from accessride.services.orchestration import OrchestrationPolicy, RecoveryOrchestrator
 from accessride.services.safety import ApprovalGate, SafeHandoff
 
 NOW = datetime(2026, 9, 9, tzinfo=UTC)
@@ -180,7 +181,8 @@ class HandoffSafetyTests(unittest.TestCase):
             incident().transition(IncidentState.OPTIONS_READY, at=NOW, actor_id="operator-7", reason="skip")
 
     def test_fixture_adapter_has_no_autonomous_booking_behavior(self) -> None:
-        adapter = FixtureCalleAdapter()
+        adapter = FixtureCalleAdapter((), RecoveryOrchestrator(
+            OrchestrationPolicy(NOW + timedelta(hours=1), 1), InMemoryApprovedProviderRoster((APPROVED,))))
         self.assertFalse(hasattr(adapter, "book"))
         self.assertFalse(hasattr(adapter, "call"))
         self.assertIn("operator brief", adapter.prepare_operator_brief("i-1", "approved-1"))

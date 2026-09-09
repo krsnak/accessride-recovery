@@ -18,6 +18,8 @@ AccessRide Recovery is a failure-first recovery workflow for a rider whose acces
 - Core domain models must not carry free-text mobility notes or disclosures. Generate transport-facing disclosure only from controlled operational requirement keys.
 - A human must explicitly approve every handoff. No code path may book a ride autonomously.
 - A live CALL-E call requires explicit operator approval. The repository ships fixture-only CALL-E behavior; do not replace it with live behavior casually.
+- CALL-E plans require an identity-registered authority issued by `RecoveryOrchestrator` for an open, roster-approved attempt and an exact immutable request/disclosure snapshot. CALL-E evidence can be issued only by the adapter for its registered run; matching IDs or provenance strings are not authority.
+- Any future live CALL-E execution requires its own single-use, expiring operator call authorization bound to the incident, provider, attempt, and plan. It is separate from handoff approval.
 
 ## Coding conventions
 

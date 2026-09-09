@@ -9,10 +9,15 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from threading import RLock
+from typing import TYPE_CHECKING
 
 from accessride.domain.incidents import Incident
+from accessride.domain.mobility import MobilityRequirement
 from accessride.domain.providers import ApprovedProviderRoster
 from accessride.domain.states import IncidentState
+
+if TYPE_CHECKING:
+    from accessride.integrations.calle import CalleVerificationRequest
 
 
 class ProviderAttemptStatus(StrEnum):
@@ -85,6 +90,23 @@ class ProviderAttempt:
     outcome_reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class CallePlanAuthority:
+    """Opaque, process-local capability issued for one open approved attempt.
+
+    Its fields are auditable correlation data, but those fields are not the
+    authority. ``RecoveryOrchestrator`` keeps the object-identity registry that
+    distinguishes an issued capability from a caller-constructed lookalike.
+    """
+
+    incident_id: str
+    provider_id: str
+    provider_attempt_id: str
+    idempotency_key: str
+    requirements_snapshot: tuple[MobilityRequirement, ...]
+    requested_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class ActivityEvent:
     sequence: int
@@ -131,6 +153,10 @@ class RecoveryOrchestrator:
         self._attempts: list[ProviderAttempt] = []
         self._idempotency: dict[tuple[str, str], ProviderAttempt] = {}
         self._events: list[ActivityEvent] = []
+        # Capabilities are registered to the mutable incident, not to a copied
+        # attempt record.  Attempt completion replaces immutable attempt values,
+        # so every use must resolve the current record below.
+        self._calle_authorities: dict[CallePlanAuthority, Incident] = {}
         # One lock deliberately covers incident state changes and all associated
         # accounting.  This makes a start decision a single atomic operation.
         self._lock = RLock()
@@ -146,6 +172,50 @@ class RecoveryOrchestrator:
     def activity_for(self, incident: Incident) -> tuple[ActivityEvent, ...]:
         with self._lock:
             return tuple(item for item in self._events if item.incident_id == incident.incident_id)
+
+    def authorize_calle_plan(self, incident: Incident, attempt_id: str, *, at: datetime) -> CallePlanAuthority:
+        """Issue a narrow planning capability for a roster-approved open attempt."""
+        if at.tzinfo is None or at.utcoffset() is None:
+            raise ValueError("CALL-E authorization time must be timezone-aware")
+        with self._lock:
+            self._ensure_monotonic(incident, at)
+            _, attempt = self._find_open_attempt(incident, attempt_id)
+            if self._roster.resolve(attempt.provider_id) is None:
+                raise PermissionError("CALL-E planning is limited to roster-approved providers")
+            authority = CallePlanAuthority(
+                incident.incident_id, attempt.provider_id, attempt.attempt_id,
+                attempt.idempotency_key, tuple(incident.requirements), at,
+            )
+            self._calle_authorities[authority] = incident
+            return authority
+
+    def validate_calle_plan_authority(self, authority: object, request: "CalleVerificationRequest") -> None:
+        """Validate identity and immutable request snapshot for a CALL-E adapter."""
+        if not isinstance(authority, CallePlanAuthority):
+            raise PermissionError("CALL-E planning requires orchestrator-issued authority")
+        with self._lock:
+            incident = self._calle_authorities.get(authority)
+            if incident is None:
+                raise PermissionError("CALL-E planning authority was not issued by this orchestrator")
+            # Do not trust the immutable attempt that existed when authority
+            # was issued. Resolve the currently registered attempt and current
+            # incident state on every use.
+            attempt = next((item for item in self._attempts
+                            if item.incident_id == incident.incident_id
+                            and item.attempt_id == authority.provider_attempt_id), None)
+            if (incident.state in _TERMINAL_STATES or attempt is None
+                    or attempt.status is not ProviderAttemptStatus.STARTED
+                    or (attempt.incident_id, attempt.provider_id, attempt.attempt_id,
+                        attempt.idempotency_key) != (authority.incident_id, authority.provider_id,
+                                                      authority.provider_attempt_id, authority.idempotency_key)
+                    or self._roster.resolve(attempt.provider_id) is None):
+                raise PermissionError("CALL-E planning authority is no longer actionable")
+            expected = (authority.incident_id, authority.provider_id, authority.provider_attempt_id,
+                        authority.idempotency_key, authority.requirements_snapshot, authority.requested_at)
+            actual = (request.incident_id, request.provider_id, request.provider_attempt_id,
+                      request.idempotency_key, request.requirements, request.requested_at)
+            if actual != expected:
+                raise PermissionError("CALL-E request must exactly match its authorized attempt snapshot")
 
     # Alias makes the audit intent explicit for consumers that present activity.
     audit_events_for = activity_for
