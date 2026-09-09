@@ -1,0 +1,5 @@
+{
+  "incident_id": "demo-001",
+  "requirements": [{"code": "wheelchair_securement", "hard_constraint": true}],
+  "note": "Operational demo fixture only; do not add diagnoses."
+}
