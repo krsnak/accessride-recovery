@@ -32,6 +32,16 @@ live smoke test must map actual CALL-E plan/run/status JSON into the documented
 strict envelope and verify that mapping before a live transport is enabled.
 Transcripts and summaries can never create verified compatibility evidence.
 
+## First live CALL-E smoke-test package
+
+Phase 6 adds an offline-only preflight, placeholder configuration, exact
+availability/accessibility call brief, typed evidence examples, runbook, and
+operator approval checklist. It still cannot make a call. See
+[the smoke-test package](docs/calle-first-live-smoke-test.md) and
+[operator checklist](docs/calle-operator-approval-checklist.md). The preflight
+is intentionally blocked unless a local one-shot approval flag and all safe
+configuration checks are present; it never invokes the CALL-E CLI.
+
 ## Direction
 
 The API is a small FastAPI seam. The future operator console uses server-rendered Jinja2 fragments, HTMX actions, and SSE for status updates; it must preserve the same approval and evidence policies as the domain layer.
