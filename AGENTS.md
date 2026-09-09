@@ -28,6 +28,27 @@ AccessRide Recovery is a failure-first recovery workflow for a rider whose acces
 - Prefer small deterministic functions and test safety boundaries directly.
 - Never log or store more mobility information than the operational need.
 
+## Autonomous workflow
+
+- Work autonomously inside the currently approved project scope. Do not stop for routine confirmations between implementation, tests, review, fixes, documentation, commit, and push.
+- The default delivery loop is: inspect current state -> implement -> run the relevant full validation suite -> perform adversarial/self review -> fix all blockers -> re-run validation -> commit -> push to the current project branch.
+- If review finds ordinary code defects, test gaps, edge cases, dependency issues, or documentation inconsistencies, fix them and continue without asking the operator.
+- Safe refactors, test additions, fixture changes, UI improvements, dependency/environment setup inside a project-local virtual environment, and documentation updates do not require separate operator confirmation when they preserve the approved architecture and safety boundaries.
+- After a successful validated phase, commit and push automatically unless the operator explicitly asked for an uncommitted review state.
+- Prefer completing a coherent phase and reporting the final result instead of repeatedly asking whether to continue.
+
+### Escalate to the operator only when
+
+- a real CALL-E phone call would be planned or executed;
+- any booking, payment, reservation, message, deployment, PR submission, Devpost submission, or other externally consequential action would occur unless that exact action was already explicitly authorized;
+- a proposed change materially alters product scope, core architecture, safety policy, privacy boundary, or the approved-provider/human-approval model;
+- credentials, secrets, account permissions, paid services, or irreversible/destructive actions are required;
+- a blocker cannot be resolved safely from repository state, tests, documentation, or available tools;
+- two materially different product/architecture choices remain and the choice affects judging strategy or user experience.
+
+- Routine progress/status updates are not approval gates. Continue working after them unless an escalation condition above is reached.
+- The standing prohibition remains absolute: never perform a live CALL-E call or autonomous booking without explicit operator approval for that action.
+
 ## Repository structure
 
 - `src/accessride/domain`: policy, models, and state transitions.

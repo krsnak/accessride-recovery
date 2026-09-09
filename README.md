@@ -9,6 +9,14 @@ PYTHONPATH=src python3 -m compileall -q src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+## Fixture demo
+
+`accessride.api.app` serves the Phase 4 fixture slice at `/demo`. It is intentionally
+single-process and in-memory: restarting the process resets the demo incident and any
+referral packet. It creates no booking, call, or dispatch action. A production deployment
+needs transactional persistence and distributed locking before preserving these guarantees
+across workers.
+
 ## Direction
 
 The API is a small FastAPI seam. The future operator console uses server-rendered Jinja2 fragments, HTMX actions, and SSE for status updates; it must preserve the same approval and evidence policies as the domain layer.

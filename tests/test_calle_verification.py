@@ -39,6 +39,13 @@ class FixtureCalleVerificationTests(unittest.TestCase):
     def _authorized_request(self, provider_id: str) -> tuple[Incident, CalleVerificationRequest, object]:
         incident = Incident("demo-001", NOW - timedelta(minutes=1), DEMO_REQUIREMENTS)
         incident.transition(IncidentState.AUTHORIZED, at=NOW - timedelta(seconds=30), actor_id="operator", reason="review")
+        # The demo fixture represents one incident's ordered A/B/C attempts.
+        # Start earlier approved attempts so the selected provider receives the
+        # same immutable attempt correlation as the fixture vertical slice.
+        for earlier in ("provider-a", "provider-b"):
+            if earlier == provider_id:
+                break
+            self.orchestrator.start_attempt(incident, earlier, f"{earlier}-key", at=NOW, actor_id="operator")
         attempt = self.orchestrator.start_attempt(incident, provider_id, f"{provider_id}-key", at=NOW, actor_id="operator")
         authority = self.orchestrator.authorize_calle_plan(incident, attempt.attempt_id, at=NOW)
         return incident, CalleVerificationRequest(incident.incident_id, provider_id, attempt.attempt_id,
