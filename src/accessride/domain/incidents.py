@@ -6,9 +6,11 @@ from .states import IncidentState
 
 _ALLOWED = {
     IncidentState.REPORTED: {IncidentState.AUTHORIZED, IncidentState.CANCELLED, IncidentState.FAILED},
-    IncidentState.AUTHORIZED: {IncidentState.PROVIDER_CHECKING, IncidentState.CANCELLED, IncidentState.DEADLINE_EXPIRED, IncidentState.FAILED},
+    IncidentState.AUTHORIZED: {IncidentState.PROVIDER_CHECKING, IncidentState.NO_COMPATIBLE_OPTION,
+                               IncidentState.CANCELLED, IncidentState.DEADLINE_EXPIRED,
+                               IncidentState.CALL_BUDGET_EXHAUSTED, IncidentState.FAILED},
     IncidentState.PROVIDER_CHECKING: {IncidentState.OPTIONS_READY, IncidentState.NO_COMPATIBLE_OPTION, IncidentState.DEADLINE_EXPIRED, IncidentState.CALL_BUDGET_EXHAUSTED, IncidentState.CANCELLED, IncidentState.FAILED},
-    IncidentState.OPTIONS_READY: {IncidentState.HUMAN_APPROVED, IncidentState.PROVIDER_CHECKING, IncidentState.CANCELLED, IncidentState.DEADLINE_EXPIRED, IncidentState.FAILED},
+    IncidentState.OPTIONS_READY: {IncidentState.HUMAN_APPROVED, IncidentState.PROVIDER_CHECKING, IncidentState.CANCELLED, IncidentState.DEADLINE_EXPIRED, IncidentState.CALL_BUDGET_EXHAUSTED, IncidentState.FAILED},
     IncidentState.HUMAN_APPROVED: {IncidentState.CANCELLED, IncidentState.DEADLINE_EXPIRED, IncidentState.FAILED},
 }
 

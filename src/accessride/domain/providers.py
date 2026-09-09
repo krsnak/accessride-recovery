@@ -15,6 +15,8 @@ class Provider:
 class ApprovedProviderRoster(Protocol):
     def resolve(self, provider_id: str) -> Provider | None: ...
 
+    def providers(self) -> tuple[Provider, ...]: ...
+
 
 class InMemoryApprovedProviderRoster:
     def __init__(self, providers: tuple[Provider, ...]) -> None:
@@ -22,3 +24,7 @@ class InMemoryApprovedProviderRoster:
 
     def resolve(self, provider_id: str) -> Provider | None:
         return self._providers.get(provider_id)
+
+    def providers(self) -> tuple[Provider, ...]:
+        """Return the approved roster for deterministic eligibility checks."""
+        return tuple(self._providers.values())
