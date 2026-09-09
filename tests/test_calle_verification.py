@@ -11,8 +11,8 @@ from accessride.domain.providers import InMemoryApprovedProviderRoster, Provider
 from accessride.domain.states import AssertionState, CompatibilityStatus, IncidentState
 from accessride.integrations.calle import (
     CalleCallAuthorization, CalleCallAuthorizationGate, CalleCallRun, CalleFixtureError,
-    CalleRunStatus, CalleVerificationAssertion, CalleVerificationRequest, FixtureCalleAdapter,
-    LiveCalleAdapter, LiveCalleUnavailableError, load_fixture_runs,
+    CalleRunStatus, CalleTransportError, CalleVerificationAssertion, CalleVerificationRequest,
+    FixtureCalleAdapter, InMemoryCalleTransport, LiveCalleAdapter, LiveCalleUnavailableError, load_fixture_runs,
 )
 from accessride.services.orchestration import CallePlanAuthority, OrchestrationPolicy, RecoveryOrchestrator
 
@@ -222,3 +222,95 @@ class FixtureCalleVerificationTests(unittest.TestCase):
             outcomes = [future.result() for future in futures]
         self.assertEqual(outcomes.count(True), 1)
         self.assertEqual(outcomes.count(False), 1)
+
+
+class LiveCalleTransportContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        FixtureCalleVerificationTests.setUp(self)
+
+    def _authorized_request(self, provider_id: str):
+        return FixtureCalleVerificationTests._authorized_request(self, provider_id)
+
+    def _envelope(self, request, *, plan_id="live-plan", run_id="live-run", status="IN_PROGRESS",
+                  assertions=(), completed_at=None, provider_id=None):
+        plan = {"plan_id": plan_id, "incident_id": request.incident_id,
+                "provider_id": provider_id or request.provider_id, "provider_attempt_id": request.provider_attempt_id,
+                "idempotency_key": request.idempotency_key, "requirements": [item.code.value for item in request.requirements],
+                "disclosure": [item.code.value for item in request.requirements], "requested_at": request.requested_at.isoformat(),
+                "planned_at": request.requested_at.isoformat()}
+        run = {**plan, "run_id": run_id, "status": status, "assertions": list(assertions),
+               "provenance": "calle-live:contract-test", "started_at": request.requested_at.isoformat(),
+               "completed_at": completed_at}
+        return plan, run
+
+    def _live(self, request, plan_response, run_response, statuses=()):
+        transport = InMemoryCalleTransport([plan_response], [run_response], {run_response["run_id"]: list(statuses)})
+        return LiveCalleAdapter(CalleCallAuthorizationGate(), self.orchestrator, transport), transport
+
+    def test_transport_happy_path_requires_authority_and_single_use_approval(self):
+        _, request, authority = self._authorized_request("provider-c")
+        assertion = {"requirement_code": RequirementCode.LIFT.value, "assertion": "VERIFIED", "value": True,
+                     "observed_at": NOW.isoformat(), "expires_at": (NOW + timedelta(hours=1)).isoformat()}
+        plan_response, run_response = self._envelope(request, status="COMPLETED", assertions=(assertion,), completed_at=NOW.isoformat())
+        live, transport = self._live(request, plan_response, run_response)
+        plan = live.plan_call(request, authority)
+        approval = live._call_authorizations.approve_call(plan, "operator", at=NOW)
+        run = live.run_call(plan, approval, at=NOW)
+        self.assertEqual(run.status, CalleRunStatus.COMPLETED)
+        self.assertEqual(len(live.evidence_for(run, request)), 1)
+        self.assertEqual(len(transport.plan_requests), 1)
+        self.assertIs(run, live.run_call(plan, approval, at=NOW))
+
+    def test_malformed_correlation_and_unknown_status_fail_closed_before_evidence(self):
+        _, request, authority = self._authorized_request("provider-c")
+        plan_response, run_response = self._envelope(request, provider_id="provider-a")
+        live, _ = self._live(request, plan_response, run_response)
+        with self.assertRaisesRegex(CalleTransportError, "provider_id"):
+            live.plan_call(request, authority)
+        plan_response, run_response = self._envelope(request, status="SURPRISE")
+        live, _ = self._live(request, plan_response, run_response)
+        plan = live.plan_call(request, authority)
+        approval = live._call_authorizations.approve_call(plan, "operator", at=NOW)
+        with self.assertRaisesRegex(CalleTransportError, "unexpected"):
+            live.run_call(plan, approval, at=NOW)
+
+        plan_response, run_response = self._envelope(request, status="COMPLETED", completed_at=NOW.isoformat(),
+            assertions=({"requirement_code": RequirementCode.RAMP.value, "assertion": "VERIFIED", "value": True,
+                         "observed_at": NOW.isoformat(), "expires_at": (NOW + timedelta(hours=1)).isoformat()},))
+        live, _ = self._live(request, plan_response, run_response)
+        plan = live.plan_call(request, authority)
+        approval = live._call_authorizations.approve_call(plan, "operator", at=NOW)
+        with self.assertRaisesRegex(CalleTransportError, "outside the request"):
+            live.run_call(plan, approval, at=NOW)
+
+    def test_status_rejects_terminal_regression_and_requirement_mismatch(self):
+        _, request, authority = self._authorized_request("provider-c")
+        plan_response, run_response = self._envelope(request)
+        completed = {**run_response, "status": "COMPLETED", "completed_at": NOW.isoformat()}
+        regressed = {**run_response, "status": "IN_PROGRESS"}
+        live, _ = self._live(request, plan_response, run_response, (completed, regressed))
+        plan = live.plan_call(request, authority)
+        approval = live._call_authorizations.approve_call(plan, "operator", at=NOW)
+        run = live.run_call(plan, approval, at=NOW)
+        self.assertEqual(live.get_call_run(run.run_id).status, CalleRunStatus.COMPLETED)
+        with self.assertRaisesRegex(CalleTransportError, "terminal"):
+            live.get_call_run(run.run_id)
+        self.setUp()
+        _, request, authority = self._authorized_request("provider-c")
+        plan_response, run_response = self._envelope(request)
+        plan_response["requirements"] = ["LIFT"]
+        live, _ = self._live(request, plan_response, run_response)
+        with self.assertRaisesRegex(CalleTransportError, "requirements"):
+            live.plan_call(request, authority)
+
+    def test_monitoring_is_bounded_by_poll_count_and_deadline(self):
+        _, request, authority = self._authorized_request("provider-c")
+        plan_response, run_response = self._envelope(request)
+        statuses = ({**run_response}, {**run_response})
+        live, _ = self._live(request, plan_response, run_response, statuses)
+        plan = live.plan_call(request, authority)
+        approval = live._call_authorizations.approve_call(plan, "operator", at=NOW)
+        run = live.run_call(plan, approval, at=NOW)
+        self.assertEqual(len(live.monitor_call_run(run.run_id, deadline_at=NOW + timedelta(minutes=1),
+                                                  max_polls=2, now=lambda: NOW)), 2)
+        self.assertEqual(live.monitor_call_run(run.run_id, deadline_at=NOW, max_polls=2, now=lambda: NOW), ())

@@ -60,11 +60,45 @@ Assertions must be request-key subsets and must be observed no earlier than
 the actual run start and no later than run completion. Duplicate run IDs, plan IDs, correlations, or
 assertions for a key fail closed. `UNKNOWN` remains an evidence assertion, not
 a positive result. The fixture lifecycle is protected by a process-local lock.
-The `LiveCalleAdapter` placeholder implements no behavior and consumes its
-separate single-use, expiring, operator-issued call authorization at the
-future external execution boundary before returning its fail-closed unavailable
-response; retries require fresh authorization, and a handoff approval never
-substitutes for this authorization.
+## Phase 5 live CALL-E transport boundary
+
+`LiveCalleAdapter` is production-shaped plumbing, not a configured live
+integration. It accepts only an explicitly injected `CalleTransport`; without
+one (or without the concrete orchestrator) it remains unavailable and performs
+no CALL-E action. It never reads credentials, constructs a CLI command, or
+contacts CALL-E itself. `InMemoryCalleTransport` provides the local contract
+test seam.
+
+The local CALL-E CLI documentation establishes `plan_id`, `confirm_token`,
+`run_id`, and status locations, but does not establish a stable response schema
+for AccessRide's incident/provider/attempt/idempotency correlation or typed
+capability assertions. Accordingly the adapter currently requires every plan
+and run/status transport envelope to contain exact `incident_id`,
+`provider_id`, `provider_attempt_id`, `idempotency_key`, and plan/run IDs; a
+plan must also echo the exact controlled requirements, disclosure, and request
+timestamp. It accepts only documented terminal statuses plus `PLANNED`,
+`IN_PROGRESS`, and `RINGING`; unknown values, missing fields, duplicate IDs,
+wrong provider/snapshot, malformed assertions, status identity changes,
+out-of-order updates, and terminal regression are rejected.
+
+Run execution still consumes the separate, single-use, expiring,
+operator-issued `CalleCallAuthorization` immediately before the transport
+boundary. A cached adapter-issued run is the only replay path; retries before a
+registered run require a newly issued authorization. No transcript, summary,
+or other free text is parsed as evidence. Only controlled typed assertions from
+an adapter-issued completed run can become evidence.
+
+`monitor_call_run` has a required timezone-aware deadline and positive maximum
+poll count, and stops on deadline or terminal status. Scheduling/delay is left
+to the future approved caller, so this local boundary contains no sleeping or
+unbounded loop.
+
+The first explicitly approved live smoke test must provide the minimal
+transport mapping from actual CLI JSON into that envelope, confirm whether
+CALL-E can echo the required correlations (or whether a signed local binding
+is needed), validate the assertion source/schema, then perform one authorized
+plan, one separately authorized run, and bounded status reads. Until then no
+live transport should be wired in production.
 
 `fixtures/calle_provider_verification.json` demonstrates three approved
 candidates: Provider A lacks required lift/boarding capability and is

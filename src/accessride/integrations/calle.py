@@ -7,7 +7,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Protocol, TYPE_CHECKING
+from typing import Callable, Mapping, Protocol, TYPE_CHECKING
 from uuid import uuid4
 
 from accessride.domain.evidence import CapabilityEvidence, EvidenceValue
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 class CalleRunStatus(StrEnum):
     PLANNED = "PLANNED"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
@@ -30,6 +31,10 @@ class CalleFixtureError(ValueError):
 
 class LiveCalleUnavailableError(RuntimeError):
     """Live CALL-E execution is deliberately unavailable in this repository."""
+
+
+class CalleTransportError(ValueError):
+    """An untrusted CALL-E transport response cannot be safely correlated."""
 
 
 _BOOLEAN_CODES = frozenset({RequirementCode.VEHICLE_AVAILABILITY, RequirementCode.WHEELCHAIR_COMPATIBILITY,
@@ -149,8 +154,13 @@ class CalleCallRun:
         if self.status is CalleRunStatus.COMPLETED:
             if self.completed_at is None or self.completed_at < self.started_at:
                 raise CalleFixtureError("completed run requires completion at or after start")
+        elif self.status is CalleRunStatus.FAILED:
+            if self.assertions:
+                raise CalleFixtureError("only completed runs may contain assertions")
+            if self.completed_at is not None and self.completed_at < self.started_at:
+                raise CalleFixtureError("failed run completion cannot predate start")
         elif self.assertions or self.completed_at is not None:
-            raise CalleFixtureError("only completed runs may contain assertions or completion time")
+            raise CalleFixtureError("only terminal runs may contain assertions or completion time")
         codes = [item.requirement_code for item in self.assertions]
         if len(codes) != len(set(codes)):
             raise CalleFixtureError("ambiguous fixture contains multiple assertions for one requirement")
@@ -224,6 +234,47 @@ class CalleVerificationAdapter(Protocol):
 
 class CalleAdapter(Protocol):
     def prepare_operator_brief(self, incident_id: str, provider_id: str) -> str: ...
+
+
+class CalleTransport(Protocol):
+    """Narrow untrusted boundary around future CALL-E plan/run/status calls.
+
+    Values returned by this interface are never evidence and must be parsed by
+    ``LiveCalleAdapter`` before entering the typed domain boundary.
+    """
+    def plan_call(self, request: Mapping[str, object]) -> Mapping[str, object]: ...
+    def run_call(self, plan: Mapping[str, object]) -> Mapping[str, object]: ...
+    def get_call_run(self, run_id: str) -> Mapping[str, object]: ...
+
+
+@dataclass(slots=True)
+class InMemoryCalleTransport:
+    """Scripted local transport used by contract tests; it has no network path."""
+    plan_responses: list[Mapping[str, object]] = field(default_factory=list)
+    run_responses: list[Mapping[str, object]] = field(default_factory=list)
+    status_responses: dict[str, list[Mapping[str, object]]] = field(default_factory=dict)
+    plan_requests: list[Mapping[str, object]] = field(default_factory=list, init=False)
+    run_requests: list[Mapping[str, object]] = field(default_factory=list, init=False)
+
+    @staticmethod
+    def _next(items: list[Mapping[str, object]], operation: str) -> Mapping[str, object]:
+        if not items:
+            raise CalleTransportError(f"mock transport has no {operation} response")
+        return items.pop(0)
+
+    def plan_call(self, request: Mapping[str, object]) -> Mapping[str, object]:
+        self.plan_requests.append(dict(request))
+        return self._next(self.plan_responses, "plan")
+
+    def run_call(self, plan: Mapping[str, object]) -> Mapping[str, object]:
+        self.run_requests.append(dict(plan))
+        return self._next(self.run_responses, "run")
+
+    def get_call_run(self, run_id: str) -> Mapping[str, object]:
+        responses = self.status_responses.get(run_id)
+        if not responses:
+            raise CalleTransportError("mock transport has no status response for run")
+        return responses.pop(0)
 
 
 def _plan_id(request: CalleVerificationRequest) -> str:
@@ -332,26 +383,210 @@ class FixtureCalleAdapter:
 
 
 class LiveCalleAdapter:
-    """Fail-closed placeholder. A future implementation must validate call authorization."""
-    def __init__(self, call_authorizations: CalleCallAuthorizationGate) -> None:
+    """Fail-closed CALL-E adapter over an explicitly supplied transport.
+
+    This class deliberately does not construct a CLI, read credentials, or
+    discover CALL-E.  Its generic transport envelope is documented in
+    ``docs/architecture.md`` and must be proven against a live smoke test.
+    """
+    def __init__(self, call_authorizations: CalleCallAuthorizationGate,
+                 orchestrator: "RecoveryOrchestrator | None" = None,
+                 transport: CalleTransport | None = None) -> None:
         self._call_authorizations = call_authorizations
+        self._orchestrator = orchestrator
+        self._transport = transport
+        self._plans: dict[tuple[str, str], CalleCallPlan] = {}
+        self._runs: dict[str, CalleCallRun] = {}
+        self._lock = RLock()
+
+    def _require_transport(self) -> CalleTransport:
+        if self._transport is None:
+            raise LiveCalleUnavailableError("live CALL-E transport is not configured; no external call was attempted")
+        return self._transport
 
     @staticmethod
-    def _unavailable() -> None:
-        raise LiveCalleUnavailableError("live CALL-E is not implemented; no external call was attempted")
+    def _time(value: object, field_name: str, *, optional: bool = False) -> datetime | None:
+        if value is None and optional:
+            return None
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError as error:
+                raise CalleTransportError(f"transport {field_name} is not an ISO timestamp") from error
+        else:
+            raise CalleTransportError(f"transport {field_name} is required")
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise CalleTransportError(f"transport {field_name} must be timezone-aware")
+        return parsed
+
+    @staticmethod
+    def _text(payload: Mapping[str, object], key: str) -> str:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise CalleTransportError(f"transport {key} is required")
+        return value
+
+    @staticmethod
+    def _request_payload(request: CalleVerificationRequest) -> dict[str, object]:
+        return {"incident_id": request.incident_id, "provider_id": request.provider_id,
+                "provider_attempt_id": request.provider_attempt_id, "idempotency_key": request.idempotency_key,
+                "requirements": tuple(item.code.value for item in request.requirements),
+                "disclosure": transport_disclosure(request.requirements), "requested_at": request.requested_at.isoformat()}
+
+    @classmethod
+    def _parse_plan(cls, payload: Mapping[str, object], request: CalleVerificationRequest) -> CalleCallPlan:
+        expected = cls._request_payload(request)
+        for key in ("incident_id", "provider_id", "provider_attempt_id", "idempotency_key", "requirements", "disclosure", "requested_at"):
+            actual = payload.get(key)
+            if key in {"requirements", "disclosure"} and isinstance(actual, (list, tuple)):
+                actual = tuple(actual)
+            if actual != expected[key]:
+                raise CalleTransportError(f"transport plan {key} does not exactly match request")
+        return CalleCallPlan(cls._text(payload, "plan_id"), request.incident_id, request.provider_id,
+            request.provider_attempt_id, request.idempotency_key, request.requirements,
+            transport_disclosure(request.requirements), cls._time(payload.get("planned_at"), "planned_at"))
+
+    @classmethod
+    def _parse_assertions(cls, raw: object) -> tuple[CalleVerificationAssertion, ...]:
+        if not isinstance(raw, (list, tuple)):
+            raise CalleTransportError("transport assertions must be a list")
+        assertions = []
+        for item in raw:
+            if not isinstance(item, Mapping):
+                raise CalleTransportError("transport assertion is malformed")
+            try:
+                assertions.append(CalleVerificationAssertion(RequirementCode(cls._text(item, "requirement_code")),
+                    AssertionState(cls._text(item, "assertion")), item.get("value"),
+                    cls._time(item.get("observed_at"), "observed_at"), cls._time(item.get("expires_at"), "expires_at")))
+            except (ValueError, CalleFixtureError) as error:
+                raise CalleTransportError("transport assertion is invalid") from error
+        return tuple(assertions)
+
+    @classmethod
+    def _parse_run(cls, payload: Mapping[str, object], plan: CalleCallPlan) -> CalleCallRun:
+        for key, expected in (("plan_id", plan.plan_id), ("incident_id", plan.incident_id),
+                              ("provider_id", plan.provider_id), ("provider_attempt_id", plan.provider_attempt_id),
+                              ("idempotency_key", plan.idempotency_key)):
+            if payload.get(key) != expected:
+                raise CalleTransportError(f"transport run {key} does not match plan")
+        external_status = cls._text(payload, "status")
+        status_map = {"PLANNED": CalleRunStatus.PLANNED, "IN_PROGRESS": CalleRunStatus.IN_PROGRESS,
+                      "RINGING": CalleRunStatus.IN_PROGRESS, "COMPLETED": CalleRunStatus.COMPLETED,
+                      "FAILED": CalleRunStatus.FAILED, "NO_ANSWER": CalleRunStatus.FAILED,
+                      "DECLINED": CalleRunStatus.FAILED, "CANCELED": CalleRunStatus.FAILED,
+                      "CANCELLED": CalleRunStatus.FAILED, "VOICEMAIL": CalleRunStatus.FAILED,
+                      "BUSY": CalleRunStatus.FAILED, "EXPIRED": CalleRunStatus.FAILED}
+        if external_status not in status_map:
+            raise CalleTransportError("transport returned an unexpected CALL-E status")
+        status = status_map[external_status]
+        completed_at = cls._time(payload.get("completed_at"), "completed_at", optional=True)
+        assertions = cls._parse_assertions(payload.get("assertions", []))
+        if status is not CalleRunStatus.COMPLETED and assertions:
+            raise CalleTransportError("only completed transport runs may include assertions")
+        if status in {CalleRunStatus.PLANNED, CalleRunStatus.IN_PROGRESS} and completed_at is not None:
+            raise CalleTransportError("nonterminal transport run cannot have completion time")
+        try:
+            run = CalleCallRun(cls._text(payload, "run_id"), plan.plan_id, plan.incident_id, plan.provider_id,
+                plan.provider_attempt_id, plan.idempotency_key, status, assertions, cls._text(payload, "provenance"),
+                cls._time(payload.get("started_at"), "started_at"), completed_at)
+        except CalleFixtureError as error:
+            raise CalleTransportError("transport run is invalid") from error
+        requested_codes = {item.code for item in plan.requirements_snapshot}
+        if any(item.requirement_code not in requested_codes for item in run.assertions):
+            raise CalleTransportError("transport assertions are outside the request snapshot")
+        if run.completed_at is not None and any(item.observed_at < run.started_at or item.observed_at > run.completed_at
+                                                for item in run.assertions):
+            raise CalleTransportError("transport assertions are outside the run lifecycle")
+        return run
 
     def plan_call(self, request: CalleVerificationRequest, authority: object) -> CalleCallPlan:
-        self._unavailable()
+        if self._orchestrator is None:
+            raise LiveCalleUnavailableError("live CALL-E orchestrator is not configured; no external call was attempted")
+        self._orchestrator.validate_calle_plan_authority(authority, request)
+        key = (request.incident_id, request.idempotency_key)
+        with self._lock:
+            existing = self._plans.get(key)
+            if existing is not None:
+                if (existing.provider_id, existing.provider_attempt_id, existing.requirements_snapshot, existing.planned_at) != (
+                        request.provider_id, request.provider_attempt_id, request.requirements, request.requested_at):
+                    raise CalleTransportError("idempotency key is bound to another immutable request snapshot")
+                return existing
+            plan = self._parse_plan(self._require_transport().plan_call(self._request_payload(request)), request)
+            if any(item.plan_id == plan.plan_id for item in self._plans.values()):
+                raise CalleTransportError("transport returned a duplicate plan id")
+            self._plans[key] = plan
+            return plan
 
     def run_call(self, plan: CalleCallPlan, authorization: CalleCallAuthorization, *, at: datetime) -> CalleCallRun:
-        # Consume immediately before the (future) external execution boundary.
-        # Even this unavailable stub models an attempted live execution, so a
-        # retry requires a newly issued, explicit operator authorization.
-        self._call_authorizations.consume(authorization, plan, at=at)
-        self._unavailable()
+        with self._lock:
+            # Preserve the historical fail-closed seam: an unconfigured live
+            # adapter validates the authorization before reporting unavailable.
+            if self._transport is None:
+                self._call_authorizations.consume(authorization, plan, at=at)
+                self._require_transport()
+            known = self._plans.get((plan.incident_id, plan.idempotency_key))
+            if known is not plan:
+                raise CalleTransportError("CALL-E plan was not issued by this live adapter")
+            existing = next((run for run in self._runs.values() if run.plan_id == plan.plan_id), None)
+            if existing is not None:
+                return existing
+            self._call_authorizations.consume(authorization, plan, at=at)
+            run = self._parse_run(self._require_transport().run_call({"plan_id": plan.plan_id,
+                "incident_id": plan.incident_id, "provider_id": plan.provider_id,
+                "provider_attempt_id": plan.provider_attempt_id, "idempotency_key": plan.idempotency_key}), plan)
+            if run.run_id in self._runs:
+                raise CalleTransportError("transport returned a duplicate run id")
+            self._runs[run.run_id] = run
+            return run
 
     def get_call_run(self, run_id: str) -> CalleCallRun:
-        self._unavailable()
+        with self._lock:
+            previous = self._runs.get(run_id)
+            if previous is None:
+                raise CalleTransportError("CALL-E status requires an adapter-issued run id")
+            current = self._parse_run(self._require_transport().get_call_run(run_id), self._plans[(previous.incident_id, previous.idempotency_key)])
+            if current.run_id != run_id or current.started_at != previous.started_at:
+                raise CalleTransportError("transport status identity changed")
+            rank = {CalleRunStatus.PLANNED: 0, CalleRunStatus.IN_PROGRESS: 1,
+                    CalleRunStatus.COMPLETED: 2, CalleRunStatus.FAILED: 2}
+            if (rank[current.status] < rank[previous.status]
+                    or previous.status in {CalleRunStatus.COMPLETED, CalleRunStatus.FAILED} and current != previous):
+                raise CalleTransportError("transport status regressed or changed after terminal state")
+            self._runs[run_id] = current
+            return current
+
+    def evidence_for(self, run: CalleCallRun, request: CalleVerificationRequest) -> tuple[CapabilityEvidence, ...]:
+        """Issue typed evidence only for this adapter's registered completed run."""
+        with self._lock:
+            known = self._runs.get(run.run_id)
+            plan = self._plans.get((request.incident_id, request.idempotency_key))
+            if known is not run or plan is None or run.plan_id != plan.plan_id:
+                raise CalleTransportError("CALL-E evidence requires an adapter-issued registered run")
+            if (run.incident_id, run.provider_id, run.provider_attempt_id, run.idempotency_key,
+                    request.requirements, request.requested_at) != (
+                    request.incident_id, request.provider_id, request.provider_attempt_id, request.idempotency_key,
+                    plan.requirements_snapshot, plan.planned_at):
+                raise CalleTransportError("CALL-E evidence does not match its immutable request snapshot")
+            return tuple(CapabilityEvidence(f"{run.run_id}:{item.requirement_code.value}", run.provider_id,
+                item.requirement_code, item.assertion, item.value, item.observed_at, item.expires_at, run.provenance)
+                for item in run.assertions) if run.status is CalleRunStatus.COMPLETED else ()
+
+    def monitor_call_run(self, run_id: str, *, deadline_at: datetime, max_polls: int,
+                         now: Callable[[], datetime]) -> tuple[CalleCallRun, ...]:
+        """Bounded status polling; callers schedule any delay outside this adapter."""
+        if deadline_at.tzinfo is None or deadline_at.utcoffset() is None or max_polls <= 0:
+            raise ValueError("monitoring requires an aware deadline and positive poll limit")
+        updates = []
+        for _ in range(max_polls):
+            if now() >= deadline_at:
+                break
+            run = self.get_call_run(run_id)
+            updates.append(run)
+            if run.status in {CalleRunStatus.COMPLETED, CalleRunStatus.FAILED}:
+                break
+        return tuple(updates)
 
 
 def load_fixture_runs(path: Path) -> tuple[CalleCallRun, ...]:

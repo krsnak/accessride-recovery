@@ -17,6 +17,21 @@ referral packet. It creates no booking, call, or dispatch action. A production d
 needs transactional persistence and distributed locking before preserving these guarantees
 across workers.
 
+## CALL-E integration status
+
+Phase 5 adds a fail-closed, injected transport boundary and local contract
+tests for a future CALL-E verification adapter. It has no configured CLI,
+credentials, or network path. Planning remains bound to an open,
+roster-approved attempt; running remains impossible without a separate,
+single-use explicit operator call authorization. Polling is bounded by both a
+deadline and a poll limit. The fixture adapter remains the only demo behavior.
+
+The local CALL-E documentation does not define the correlation and typed
+capability-assertion schema this workflow needs. The first explicitly approved
+live smoke test must map actual CALL-E plan/run/status JSON into the documented
+strict envelope and verify that mapping before a live transport is enabled.
+Transcripts and summaries can never create verified compatibility evidence.
+
 ## Direction
 
 The API is a small FastAPI seam. The future operator console uses server-rendered Jinja2 fragments, HTMX actions, and SSE for status updates; it must preserve the same approval and evidence policies as the domain layer.
